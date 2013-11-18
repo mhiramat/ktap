@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/poll.h>
@@ -86,7 +87,11 @@ static void *reader_thread(void *data)
 	}
 
 	while ((len = read(fd, buf, sizeof(buf))) > 0)
-		write(out_fd, buf, len);
+		if (write(out_fd, buf, len) < 0) {
+			fprintf(stderr, "Failed to write output: %s\n",
+				strerror(errno));
+			break;
+		}
 
 	close(fd);
 	close(out_fd);
