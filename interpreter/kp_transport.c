@@ -19,6 +19,7 @@
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include <linux/percpu.h>
 #include <linux/debugfs.h>
 #include <linux/ftrace_event.h>
 #include <linux/stacktrace.h>
@@ -555,19 +556,61 @@ void kp_transport_write(ktap_state *ks, const void *data, size_t length)
 	}
 }
 
+#define PRINT_BUF_SIZE	1024
+struct print_buffer {
+	char 		buffer[PRINT_BUF_SIZE];
+	raw_spinlock_t	lock;
+} __percpu *kp_print_buf;
+
+static struct print_buffer *get_print_buffer(void)
+{
+	struct print_buffer *buf;
+	unsigned long flags;
+
+	local_irq_save(flags);	
+	buf = this_cpu_ptr(kp_print_buf);
+	if (!raw_spin_trylock(&buf->lock))
+		buf = NULL;
+	local_irq_restore(flags);
+	return buf;
+}
+
+static void put_print_buffer(struct print_buffer *buf)
+{
+	raw_spin_unlock(&buf->lock);
+}
+
+static void init_print_buffer(void)
+{
+	struct print_buffer *buf;
+	int i;
+
+	kp_print_buf = alloc_percpu(struct print_buffer);
+
+	for_each_possible_cpu(i) {
+		buf = per_cpu_ptr(kp_print_buf, i);
+		raw_spin_lock_init(&buf->lock);
+	}
+}
+
 /* general print function */
 void kp_printf(ktap_state *ks, const char *fmt, ...)
 {
-	char buff[1024];
+	struct print_buffer *buf;
 	va_list args;
 	int len;
 
+	buf = get_print_buffer();
+	if (!buf)
+		return ;	/* TODO: should we return an error ? */
+
 	va_start(args, fmt);
-	len = vscnprintf(buff, 1024, fmt, args);
+	len = vscnprintf(buf->buffer, PRINT_BUF_SIZE, fmt, args);
 	va_end(args);
 
-	buff[len] = '\0';
-	kp_transport_write(ks, buff, len + 1);
+	buf->buffer[len] = '\0';
+	kp_transport_write(ks, buf->buffer, len + 1);
+	put_print_buffer(buf);
 }
 
 void __kp_puts(ktap_state *ks, const char *str)
@@ -612,6 +655,8 @@ int kp_transport_init(ktap_state *ks, struct dentry *dir)
 	struct ring_buffer *buffer;
 	struct dentry *dentry;
 	char filename[32] = {0};
+
+	init_print_buffer();
 
 	ftrace_find_event = (void *)kallsyms_lookup_name("ftrace_find_event");
 	if (!ftrace_find_event) {
