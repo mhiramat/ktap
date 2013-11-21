@@ -234,6 +234,7 @@ static int parse_events_add_tracepoint(char *sys, char *event)
 enum {
 	KPROBE_EVENT,
 	UPROBE_EVENT,
+	PERF_PROBE_EVENT,
 };
 
 struct probe_list {
@@ -244,6 +245,22 @@ struct probe_list {
 };
 
 static struct probe_list *probe_list_head; /* for cleanup resources */
+
+static int add_probe_list(int type, int seq)
+{
+	struct probe_list *pl;
+
+	pl = malloc(sizeof(struct probe_list));
+	if (!pl)
+		return -1;
+
+	pl->type = type;
+	pl->kp_seq = seq;
+	pl->next = probe_list_head;
+	probe_list_head = pl;
+
+	return 0;
+}
 
 static int parse_events_add_perf_probe(const char *old_event, int event_seq)
 {
@@ -256,7 +273,7 @@ static int parse_events_add_perf_probe(const char *old_event, int event_seq)
 	if (perf[0] == '\0')
 		return -ENOENT;
 
-	ret = asprintf(&buf, "%s -a 'kprobes/kp%d=%s'",
+	ret = asprintf(&buf, "%s probe -a 'kp%d=%s'",
 			perf, event_seq, old_event);
 	if (ret < 0)
 		return -ENOMEM;
@@ -266,8 +283,10 @@ static int parse_events_add_perf_probe(const char *old_event, int event_seq)
 	if (!fp)
 		return -errno;
 	ret = pclose(fp);
-	if (ret != 0)
+	if (ret < 0) {
+		verbose_printf("perf probe returns %d\n", ret);
 		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -277,7 +296,6 @@ static int parse_events_add_perf_probe(const char *old_event, int event_seq)
 static int parse_events_add_kprobe(char *old_event)
 {
 	static int event_seq = 0;
-	struct probe_list *pl;
 	char probe_event[128] = {0};
 	char event_id_path[128] = {0};
 	char *event;
@@ -285,8 +303,13 @@ static int parse_events_add_kprobe(char *old_event)
 	int fd;
 	int ret;
 
-	if (parse_events_add_perf_probe(old_event, event_seq) == 0)
+	if (parse_events_add_perf_probe(old_event, event_seq) == 0) {
+		add_probe_list(PERF_PROBE_EVENT, event_seq);
+		sprintf(event_id_path,
+			"/sys/kernel/debug/tracing/events/probe/kp%d/id",
+			 event_seq);
 		goto registered;
+	}
 
 	/* fallback to ftrace events */
 	fd = open(KPROBE_EVENTS_PATH, O_WRONLY);
@@ -317,19 +340,12 @@ static int parse_events_add_kprobe(char *old_event)
 	}
 
 	close(fd);
-registered:
 
-	pl = malloc(sizeof(struct probe_list));
-	if (!pl)
-		return -1;
-
-	pl->type = KPROBE_EVENT;
-	pl->kp_seq = event_seq;
-	pl->next = probe_list_head;
-	probe_list_head = pl;
-
+	add_probe_list(KPROBE_EVENT, event_seq);
 	sprintf(event_id_path,
 		"/sys/kernel/debug/tracing/events/kprobes/kp%d/id", event_seq);
+
+registered:
 	ret = add_event(event_id_path);
 	if (ret < 0)
 		return -1;
@@ -776,6 +792,10 @@ void cleanup_event_resources(void)
 			path = UPROBE_EVENTS_PATH;
 			snprintf(probe_event, 128, "-:uprobes/kp%d_%s",
 				 pl->kp_seq, pl->symbol);
+		} else if (pl->type == PERF_PROBE_EVENT) {
+			path = UPROBE_EVENTS_PATH;
+			snprintf(probe_event, 128, "-:probe/kp%d",
+				 pl->kp_seq);
 		} else {
 			fprintf(stderr, "Cannot cleanup event type %d\n", pl->type);
 			continue;
