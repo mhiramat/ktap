@@ -576,9 +576,13 @@ static int parse_events_add_uprobe(char *old_event, int type)
 static int parse_events_add_probe(char *old_event)
 {
 	char *separator;
+	char *eopp;	/* end of probe point */
 
+	eopp = strchr(old_event, ' ');
+	if (!eopp)
+		eopp = old_event + strlen(old_event);
 	separator = strchr(old_event, ':');
-	if (!separator || (separator == old_event))
+	if (!separator || eopp <  separator || (separator == old_event))
 		return parse_events_add_kprobe(old_event);
 	else
 		return parse_events_add_uprobe(old_event, FIND_SYMBOL);
