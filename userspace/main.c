@@ -141,6 +141,31 @@ void *ktapc_growaux(void *block, int *size, size_t size_elems, int limit,
 	return newblock;
 }
 
+#define PATH_MAX 1024
+
+const char *get_perf_path(void)
+{
+	static char *perf_path = NULL;
+	char *tmp;
+	FILE *fp;
+
+	if (perf_path)
+		return perf_path;
+
+	perf_path = getenv("PERF_TOOLS_PATH");
+	if (!perf_path) {
+		perf_path = malloc(PATH_MAX);
+		fp = popen("which perf", "r");
+		if (fgets(perf_path, PATH_MAX, fp) == NULL)
+			perf_path[0] = '\0';
+		fclose(fp);
+		tmp = strchr(perf_path,'\n');
+		if (tmp)
+			*tmp = '\0';
+	}
+	return perf_path;
+}
+
 /*************************************************************************/
 
 #define print_base(i) \

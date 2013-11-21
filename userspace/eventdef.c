@@ -19,12 +19,14 @@
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#define _GNU_SOURCE
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #include "../include/ktap_types.h"
 #include "../include/ktap_opcodes.h"
@@ -243,6 +245,33 @@ struct probe_list {
 
 static struct probe_list *probe_list_head; /* for cleanup resources */
 
+static int parse_events_add_perf_probe(const char *old_event, int event_seq)
+{
+	const char *perf;
+	char *buf;
+	FILE *fp;
+	int ret;
+
+	perf = get_perf_path();
+	if (perf[0] == '\0')
+		return -ENOENT;
+
+	ret = asprintf(&buf, "%s -a 'kprobes/kp%d=%s'",
+			perf, event_seq, old_event);
+	if (ret < 0)
+		return -ENOMEM;
+
+	verbose_printf("perf kprobe event %s\n", buf);
+	fp = popen(buf, "r");
+	if (!fp)
+		return -errno;
+	ret = pclose(fp);
+	if (ret != 0)
+		return -EINVAL;
+
+	return 0;
+}
+
 #define KPROBE_EVENTS_PATH "/sys/kernel/debug/tracing/kprobe_events"
 
 static int parse_events_add_kprobe(char *old_event)
@@ -256,6 +285,10 @@ static int parse_events_add_kprobe(char *old_event)
 	int fd;
 	int ret;
 
+	if (parse_events_add_perf_probe(old_event, event_seq) == 0)
+		goto registered;
+
+	/* fallback to ftrace events */
 	fd = open(KPROBE_EVENTS_PATH, O_WRONLY);
 	if (fd < 0) {
 		fprintf(stderr, "Cannot open %s\n", KPROBE_EVENTS_PATH);
@@ -284,6 +317,7 @@ static int parse_events_add_kprobe(char *old_event)
 	}
 
 	close(fd);
+registered:
 
 	pl = malloc(sizeof(struct probe_list));
 	if (!pl)

@@ -373,4 +373,4 @@ int ktapc_int2fb(unsigned int x);
 bool strglobmatch(const char *str, const char *pat);
 unsigned long ktapc_read_ksym(ktap_string *ts);
 
-
+const char *get_perf_path(void);
